@@ -81,23 +81,21 @@ async function run() {
         
         // 🚨 ここからデバッグログを追加 🚨
         console.log("--- 教師データのエンコード前・後の状態 ---");
-        const encodedTrainingData = processedTrainingData.map(data => {
-            const encodedVector = encode(data.text);
-            const containsInvalid = encodedVector.some(val => isNaN(val) || typeof val !== 'number');
-            
+        // 教師データをテンソルに渡す直前
+        const encodedTrainingData = processedTrainingData.map(data => encode(data.text));
+
+        console.log("--- テンソルに変換する教師データを確認 ---");
+        encodedTrainingData.forEach((vector, index) => {
+            const containsInvalid = vector.some(val => isNaN(val) || typeof val !== 'number');
             if (containsInvalid) {
-                console.error(`⛔️ ERROR: エンコード失敗の原因となる教師データを発見!`);
-                console.error(`- 元のテキスト: "${data.text}"`);
-                console.error(`- エンコード結果: [${encodedVector.join(', ')}]`);
-                // この時点で処理を中断することも可能です
-                // throw new Error("不正な教師データが検出されました。");
+                console.error(`⛔️ エラー箇所を発見: Index ${index}, 元のテキスト: "${processedTrainingData[index].text}"`);
+                console.error(`- 無効なデータを含むベクトル: [${vector.join(', ')}]`);
             }
-            return encodedVector;
         });
-        console.log("--- 教師データのチェック完了 ---");
-        
+        console.log("------------------------------------------");
+
         const xs = tf.tensor2d(encodedTrainingData);
-        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]));
+        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]))
         
         const model = await trainModel(xs, ys);
 
