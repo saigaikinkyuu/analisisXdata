@@ -1,20 +1,29 @@
 // トレーニングデータのJSONをホストしているURLを指定
-const TRAINING_DATA_URL = './json/training_data.json';
+const TRAINING_DATA_URL = 'https://example.com/training_data.json';
 // 実データ（テスト用）のJSONをホストしているURLを指定
-const ACTUAL_DATA_URL = './json/actual_data.json';
+const ACTUAL_DATA_URL = 'https://example.com/actual_data.json';
 
-// テキストを数値化するためのボキャブラリとエンコーダー
+// グローバルスコープでボキャブラリとエンコーダーを定義
 let vocabulary = new Set();
 let wordToIndex = {};
 let maxLength = 0;
 
 function encode(text) {
-    const words = text.split(' ');
-    const encoded = words.map(word => wordToIndex[word] || 0);
-    while (encoded.length < maxLength) {
-        encoded.push(0);
-    }
-    return encoded;
+    // 句読点や特殊文字を削除して小文字に変換
+    const cleanedText = text.replace(/[^\w\s]/g, '').toLowerCase();
+    const words = cleanedText.split(' ').filter(word => word.length > 0);
+    
+    const encoded = words.map(word => wordToIndex[word] || 0); // 未知の単語は0
+    
+    // パディング
+    const padded = new Array(maxLength).fill(0);
+    encoded.forEach((value, index) => {
+        if (index < maxLength) {
+            padded[index] = value;
+        }
+    });
+    
+    return padded;
 }
 
 // モデルの構築とトレーニング
@@ -24,21 +33,27 @@ async function trainModel(trainingData) {
         return null;
     }
 
-    // ボキャブラリの構築とテキストの数値化
+    // ボキャブラリを構築し、テキストを数値化する
     trainingData.forEach(data => {
-        data.text.split(' ').forEach(word => vocabulary.add(word));
+        const cleanedText = data.text.replace(/[^\w\s]/g, '').toLowerCase();
+        cleanedText.split(' ').forEach(word => {
+            if (word.length > 0) {
+                vocabulary.add(word);
+            }
+        });
     });
     let index = 1;
     vocabulary.forEach(word => {
         wordToIndex[word] = index++;
     });
-    maxLength = Math.max(...trainingData.map(d => d.text.split(' ').length));
-
+    
+    maxLength = Math.max(...trainingData.map(d => d.text.split(' ').filter(word => word.length > 0).length));
+    
     const xs = tf.tensor2d(trainingData.map(data => encode(data.text)));
     const ys = tf.tensor2d(trainingData.map(data => [data.label]));
 
     const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [xs.shape[1]] }));
+    model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [maxLength] }));
     model.add(tf.layers.dense({ units: 1 }));
 
     model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
@@ -57,39 +72,50 @@ async function trainModel(trainingData) {
     return model;
 }
 
+// JSONデータを取得し、モデルを学習・予測してチャート化
 async function run() {
     try {
         console.log('トレーニングデータを取得中...');
         const trainingResponse = await fetch(TRAINING_DATA_URL);
-        const trainingData = await trainingResponse.json();
-        const processedTrainingData = trainingData.map(item => ({
+        const trainingJsonData = await trainingResponse.json();
+        
+        const processedTrainingData = trainingJsonData.map(item => ({
             text: item.message,
             label: item.waitTime
         }));
 
+        // ボキャブラリ構築とモデルの学習
         const model = await trainModel(processedTrainingData);
-        if (!model) { return; }
 
-        console.log('実データ（メッセージのみ）を取得し、予測を実行中...');
-        const actualResponse = await fetch(ACTUAL_DATA_URL_MESSAGES_ONLY);
-        const actualMessagesOnly = await actualResponse.json();
+        if (!model) {
+            return;
+        }
 
-        // 予測の実行
+        console.log('実データを取得し、予測を実行中...');
+        const actualResponse = await fetch(ACTUAL_DATA_URL);
+        const actualJsonData = await actualResponse.json();
+        
+        const actualData = actualJsonData.map(item => ({
+            text: item.message,
+            label: item.waitTime
+        }));
+
         const predictedWaitTimes = [];
-        const labelsForChart = [];
-        actualMessagesOnly.forEach((message, index) => {
-            const encodedMessage = encode(message);
+        const actualWaitTimes = [];
+        for (const item of actualData) {
+            const encodedMessage = encode(item.text);
             const prediction = model.predict(tf.tensor2d([encodedMessage]));
             predictedWaitTimes.push(Math.round(prediction.dataSync()[0]));
-            labelsForChart.push(`Message ${index + 1}`);
-        });
+            actualWaitTimes.push(item.label);
+        }
 
-        console.log("予測された待ち時間:", predictedWaitTimes);
+        console.log("実データの実際の待ち時間:", actualWaitTimes);
+        console.log("実データの予測された待ち時間:", predictedWaitTimes);
 
-        // 平均値の計算
+        // 平均値の計算とチャート化
+        const averageActualWaitTime = actualWaitTimes.reduce((sum, val) => sum + val, 0) / actualWaitTimes.length;
         const averagePredictedWaitTime = predictedWaitTimes.reduce((sum, val) => sum + val, 0) / predictedWaitTimes.length;
 
-        // Chart.jsで可視化
         const ctx = document.getElementById('myChart').getContext('2d');
         if (window.myChartInstance) {
             window.myChartInstance.destroy();
@@ -98,9 +124,16 @@ async function run() {
         window.myChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: labelsForChart,
+                labels: actualData.map(item => `ID: ${item.id || actualData.indexOf(item)}`),
                 datasets: [{
-                    label: '予測された待ち時間',
+                    label: '実データの実際の待ち時間',
+                    data: actualWaitTimes,
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1
+                }, {
+                    label: '実データの予測待ち時間',
                     data: predictedWaitTimes,
                     borderColor: 'rgba(255, 99, 132, 1)',
                     borderWidth: 2,
@@ -109,11 +142,33 @@ async function run() {
                 }]
             },
             options: {
-                // ... (scalesやpluginsの設定は前回のコードと同様)
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: '待ち時間 (分)' }
+                    },
+                    x: {
+                        title: { display: true, text: 'データポイント' }
+                    }
+                },
                 plugins: {
                     annotation: {
                         annotations: {
                             line1: {
+                                type: 'line',
+                                yMin: averageActualWaitTime,
+                                yMax: averageActualWaitTime,
+                                borderColor: 'rgb(75, 192, 192)',
+                                borderWidth: 2,
+                                borderDash: [6, 6],
+                                label: {
+                                    enabled: true,
+                                    content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`,
+                                    position: 'end'
+                                }
+                            },
+                            line2: {
                                 type: 'line',
                                 yMin: averagePredictedWaitTime,
                                 yMax: averagePredictedWaitTime,
@@ -136,5 +191,5 @@ async function run() {
         console.error('データの取得またはモデルのトレーニング中にエラーが発生しました:', error);
     }
 }
-// 実行
+
 run();
