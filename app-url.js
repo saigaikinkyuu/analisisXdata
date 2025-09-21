@@ -65,6 +65,11 @@ async function main() {
   const actualInputs = tf.tensor2d(tokenizeMessages(actualMessages, vocab));
   const predictions = await model.predict(actualInputs).array();
 
+  actualMessages.forEach((msg, i) => {
+    const predicted = predictions[i][0];
+    console.log(`メッセージ: "${msg}" → 予測待ち時間: ${predicted === 999999 ? '不明' : predicted.toFixed(2)} 分`);
+  });
+
   // 999999（不明）でないものだけチャートに表示
   const filteredResults = actualMessages.map((msg, i) => {
     return { message: msg, waitTime: predictions[i][0] };
