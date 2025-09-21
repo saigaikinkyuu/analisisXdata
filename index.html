@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Waiting Time Predictor from URL</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script
+        src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+</head>
+
+<body>
+    <h1>URLからの待ち時間データ予測と可視化</h1>
+    <p>外部JSONファイルからデータを読み込み、モデルを学習させます。</p>
+    <hr>
+    <canvas id="myChart"></canvas>
+
+    <script src="app-url.js"></script>
+</body>
+
+</html>
