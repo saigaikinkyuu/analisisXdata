@@ -38,13 +38,13 @@ async function trainModel(trainingData) {
         return null;
     }
 
-    // ボキャブラリを構築し、テキストを数値化する
+    // ボキャブラリの構築とテキストの数値化
     trainingData.forEach(data => {
+        // 🚨 修正: ここで`encode`関数と同じテキストクリーンアップを行う
         const cleanedText = data.text.replace(/[^\w\s]/g, '').toLowerCase();
-        cleanedText.split(' ').forEach(word => {
-            if (word.length > 0) {
-                vocabulary.add(word);
-            }
+        const words = cleanedText.split(' ').filter(word => word.length > 0);
+        words.forEach(word => {
+            vocabulary.add(word);
         });
     });
     let index = 1;
@@ -52,7 +52,11 @@ async function trainModel(trainingData) {
         wordToIndex[word] = index++;
     });
     
-    maxLength = Math.max(...trainingData.map(d => d.text.split(' ').filter(word => word.length > 0).length));
+    // 🚨 修正: maxLengthの計算もクリーンアップ後の単語数で行う
+    maxLength = Math.max(...trainingData.map(d => {
+        const cleanedText = d.text.replace(/[^\w\s]/g, '').toLowerCase();
+        return cleanedText.split(' ').filter(word => word.length > 0).length;
+    }));
     
     const xs = tf.tensor2d(trainingData.map(data => encode(data.text)));
     const ys = tf.tensor2d(trainingData.map(data => [data.label]));
