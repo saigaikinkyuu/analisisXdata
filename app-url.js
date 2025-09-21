@@ -1,145 +1,89 @@
-// トレーニングデータのJSONをホストしているURLを指定
-const TRAINING_DATA_URL = './json/training_data.json';
-// 実データ（テスト用）のJSONをホストしているURLを指定
-const ACTUAL_DATA_URL = './json/actual_data.json';
-
-let vocabulary = new Set();
-let wordToIndex = {};
-let maxLength = 0;
-
-// データをクリーンアップし、単語配列に変換する共通関数
-function cleanAndTokenize(text) {
-    if (!text || typeof text !== 'string') {
-        return [];
-    }
-    const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g;
-    const cleanedText = text.replace(emojiRegex, '').replace(/[^\w\s]/g, '').toLowerCase();
-    return cleanedText.split(' ').filter(word => word.length > 0);
+async function loadJSON(path) {
+  const response = await fetch(path);
+  return await response.json();
 }
 
-// テキストを数値配列に変換する関数
-function encode(text) {
-    const words = cleanAndTokenize(text);
-    const encoded = words.map(word => wordToIndex[word] || 0);
-    const padded = new Array(maxLength).fill(0);
-    encoded.forEach((value, index) => {
-        if (index < maxLength) {
-            padded[index] = value;
-        }
+// 単純なテキストをベクトル化（Bag of Words風の手法）
+function tokenizeMessages(messages, vocab) {
+  return messages.map(msg => {
+    const tokens = Array(vocab.length).fill(0);
+    msg.toLowerCase().split(/[\s!?。、「」]/).forEach(word => {
+      const index = vocab.indexOf(word);
+      if (index >= 0) tokens[index] = 1;
     });
-    return padded;
+    return tokens;
+  });
 }
 
-// モデルの構築とトレーニング
-async function trainModel(xs, ys) {
-    if (xs.shape[0] === 0 || xs.shape[1] === 0) {
-        console.error("TensorFlowへの入力データが空です。");
-        return null;
-    }
-    const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [maxLength] }));
-    model.add(tf.layers.dense({ units: 1 }));
-    model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
-    console.log('モデルのトレーニングを開始...');
-    await model.fit(xs, ys, {
-        epochs: 50,
-        batchSize: 2,
-        callbacks: { onEpochEnd: (epoch, logs) => console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`) }
+// 語彙を構築
+function buildVocabulary(messages) {
+  const vocabSet = new Set();
+  messages.forEach(msg => {
+    msg.toLowerCase().split(/[\s!?。、「」]/).forEach(word => {
+      if (word) vocabSet.add(word);
     });
-    console.log('モデルのトレーニングが完了しました。');
-    return model;
+  });
+  return Array.from(vocabSet);
 }
 
-// データの読み込み、前処理、学習、予測、可視化を実行
-async function run() {
-    try {
-        console.log('トレーニングデータを取得中...');
-        const trainingResponse = await fetch(TRAINING_DATA_URL);
-        const trainingJsonData = await trainingResponse.json();
-        
-        // 🚨 修正: 無効なデータを含む可能性のある教師データをフィルタリング
-        const processedTrainingData = trainingJsonData
-            .filter(item => item.message && typeof item.message === 'string' && item.message.trim().length > 0)
-            .map(item => ({ text: item.message, label: item.waitTime }));
+async function main() {
+  const trainingData = await loadJSON('./json/training_data.json');
+  const actualData = await loadJSON('./json/actual_data.json');
 
-        // ボキャブラリ構築
-        processedTrainingData.forEach(data => cleanAndTokenize(data.text).forEach(word => vocabulary.add(word)));
-        let index = 1;
-        vocabulary.forEach(word => { wordToIndex[word] = index++; });
-        maxLength = Math.max(...processedTrainingData.map(d => cleanAndTokenize(d.text).length));
-        if (maxLength === 0) throw new Error("トレーニングデータに有効な単語がありません。");
-        
-        // テンソルへの変換
-        const xs = tf.tensor2d(processedTrainingData.map(data => encode(data.text)));
-        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]));
-        
-        const model = await trainModel(xs, ys);
-        if (!model) return;
+  const trainingMessages = trainingData.map(d => d.message);
+  const trainingLabels = trainingData.map(d => parseFloat(d.waitTime) || 0);
 
-        // ...（実データの取得と予測、チャートの描画）
-        console.log('実データを取得し、予測を実行中...');
-        const actualResponse = await fetch(ACTUAL_DATA_URL);
-        const actualJsonData = await actualResponse.json();
-        const actualData = actualJsonData.map(item => ({ text: item.message, label: item.waitTime }));
+  const actualMessages = actualData.map(d => d.message);
 
-        const predictedWaitTimes = [];
-        const actualWaitTimes = [];
-        for (const item of actualData) {
-            const encodedMessage = encode(item.text);
-            const prediction = model.predict(tf.tensor2d([encodedMessage]));
-            predictedWaitTimes.push(Math.round(prediction.dataSync()[0]));
-            actualWaitTimes.push(item.label);
+  const vocab = buildVocabulary(trainingMessages);
+  const xs = tf.tensor2d(tokenizeMessages(trainingMessages, vocab));
+  const ys = tf.tensor2d(trainingLabels, [trainingLabels.length, 1]);
+
+  // モデルの定義
+  const model = tf.sequential();
+  model.add(tf.layers.dense({ units: 16, activation: 'relu', inputShape: [vocab.length] }));
+  model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1 }));
+
+  model.compile({ loss: 'meanSquaredError', optimizer: 'adam' });
+
+  // モデルの学習
+  await model.fit(xs, ys, {
+    epochs: 50,
+    batchSize: 4,
+    shuffle: true
+  });
+
+  // 実データで予測
+  const actualInputs = tf.tensor2d(tokenizeMessages(actualMessages, vocab));
+  const predictions = model.predict(actualInputs);
+  const predictedValues = await predictions.array();
+
+  // Chart.js で可視化
+  const ctx = document.getElementById('waitChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: actualMessages,
+      datasets: [{
+        label: '予測待ち時間（分）',
+        data: predictedValues.map(p => p[0]),
+        backgroundColor: 'rgba(75, 192, 192, 0.6)'
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: '待ち時間（分）' }
+        },
+        x: {
+          title: { display: true, text: 'メッセージ' }
         }
-
-        console.log("実データの実際の待ち時間:", actualWaitTimes);
-        console.log("実データの予測された待ち時間:", predictedWaitTimes);
-        
-        const averageActualWaitTime = actualWaitTimes.reduce((sum, val) => sum + val, 0) / actualWaitTimes.length;
-        const averagePredictedWaitTime = predictedWaitTimes.reduce((sum, val) => sum + val, 0) / predictedWaitTimes.length;
-
-        const ctx = document.getElementById('myChart').getContext('2d');
-        if (window.myChartInstance) window.myChartInstance.destroy();
-
-        window.myChartInstance = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: actualData.map(item => `ID: ${item.id || actualData.indexOf(item)}`),
-                datasets: [{
-                    label: '実データの実際の待ち時間',
-                    data: actualWaitTimes,
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    borderWidth: 2,
-                    fill: false,
-                    tension: 0.1
-                }, {
-                    label: '実データの予測待ち時間',
-                    data: predictedWaitTimes,
-                    borderColor: 'rgba(255, 99, 132, 1)',
-                    borderWidth: 2,
-                    fill: false,
-                    tension: 0.1
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: '待ち時間 (分)' } },
-                    x: { title: { display: true, text: 'データポイント' } }
-                },
-                plugins: {
-                    annotation: {
-                        annotations: {
-                            line1: { type: 'line', yMin: averageActualWaitTime, yMax: averageActualWaitTime, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, borderDash: [6, 6], label: { enabled: true, content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`, position: 'end' } },
-                            line2: { type: 'line', yMin: averagePredictedWaitTime, yMax: averagePredictedWaitTime, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, borderDash: [6, 6], label: { enabled: true, content: `予測平均値: ${averagePredictedWaitTime.toFixed(2)}`, position: 'start' } }
-                        }
-                    }
-                }
-            }
-        });
-
-    } catch (error) {
-        console.error('データの取得またはモデルのトレーニング中にエラーが発生しました:', error);
+      }
     }
+  });
 }
 
-run();
+main();
