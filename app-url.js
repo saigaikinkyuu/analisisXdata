@@ -3,52 +3,48 @@ const TRAINING_DATA_URL = './json/training_data.json';
 // 実データ（テスト用）のJSONをホストしているURLを指定
 const ACTUAL_DATA_URL = './json/actual_data.json';
 
-// グローバルスコープでボキャブラリとエンコーダーを定義
 let vocabulary = new Set();
 let wordToIndex = {};
 let maxLength = 0;
 
 // データをクリーンアップし、単語配列に変換する共通関数
 function cleanAndTokenize(text) {
+    if (!text || typeof text !== 'string') {
+        return [];
+    }
     const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g;
     const cleanedText = text.replace(emojiRegex, '').replace(/[^\w\s]/g, '').toLowerCase();
-    
     return cleanedText.split(' ').filter(word => word.length > 0);
 }
 
 // テキストを数値配列に変換する関数
 function encode(text) {
     const words = cleanAndTokenize(text);
-    
     const encoded = words.map(word => wordToIndex[word] || 0);
-    
     const padded = new Array(maxLength).fill(0);
     encoded.forEach((value, index) => {
         if (index < maxLength) {
             padded[index] = value;
         }
     });
-    
     return padded;
 }
 
 // モデルの構築とトレーニング
 async function trainModel(xs, ys) {
+    if (xs.shape[0] === 0 || xs.shape[1] === 0) {
+        console.error("TensorFlowへの入力データが空です。");
+        return null;
+    }
     const model = tf.sequential();
     model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [maxLength] }));
     model.add(tf.layers.dense({ units: 1 }));
-
     model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
-
     console.log('モデルのトレーニングを開始...');
     await model.fit(xs, ys, {
         epochs: 50,
         batchSize: 2,
-        callbacks: {
-            onEpochEnd: (epoch, logs) => {
-                console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`);
-            }
-        }
+        callbacks: { onEpochEnd: (epoch, logs) => console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}`) }
     });
     console.log('モデルのトレーニングが完了しました。');
     return model;
@@ -61,56 +57,30 @@ async function run() {
         const trainingResponse = await fetch(TRAINING_DATA_URL);
         const trainingJsonData = await trainingResponse.json();
         
-        const processedTrainingData = trainingJsonData.map(item => ({
-            text: item.message,
-            label: item.waitTime
-        }));
+        // 🚨 修正: 無効なデータを含む可能性のある教師データをフィルタリング
+        const processedTrainingData = trainingJsonData
+            .filter(item => item.message && typeof item.message === 'string' && item.message.trim().length > 0)
+            .map(item => ({ text: item.message, label: item.waitTime }));
 
-        processedTrainingData.forEach(data => {
-            cleanAndTokenize(data.text).forEach(word => {
-                vocabulary.add(word);
-            });
-        });
-
+        // ボキャブラリ構築
+        processedTrainingData.forEach(data => cleanAndTokenize(data.text).forEach(word => vocabulary.add(word)));
         let index = 1;
-        vocabulary.forEach(word => {
-            wordToIndex[word] = index++;
-        });
-        
+        vocabulary.forEach(word => { wordToIndex[word] = index++; });
         maxLength = Math.max(...processedTrainingData.map(d => cleanAndTokenize(d.text).length));
+        if (maxLength === 0) throw new Error("トレーニングデータに有効な単語がありません。");
         
-        // 🚨 ここからデバッグログを追加 🚨
-        console.log("--- 教師データのエンコード前・後の状態 ---");
-        // 教師データをテンソルに渡す直前
-        const encodedTrainingData = processedTrainingData.map(data => encode(data.text));
-
-        console.log("--- テンソルに変換する教師データを確認 ---");
-        encodedTrainingData.forEach((vector, index) => {
-            const containsInvalid = vector.some(val => isNaN(val) || typeof val !== 'number');
-            if (containsInvalid) {
-                console.error(`⛔️ エラー箇所を発見: Index ${index}, 元のテキスト: "${processedTrainingData[index].text}"`);
-                console.error(`- 無効なデータを含むベクトル: [${vector.join(', ')}]`);
-            }
-        });
-        console.log("------------------------------------------");
-
-        const xs = tf.tensor2d(encodedTrainingData);
-        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]))
+        // テンソルへの変換
+        const xs = tf.tensor2d(processedTrainingData.map(data => encode(data.text)));
+        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]));
         
         const model = await trainModel(xs, ys);
+        if (!model) return;
 
-        if (!model) {
-            return;
-        }
-
+        // ...（実データの取得と予測、チャートの描画）
         console.log('実データを取得し、予測を実行中...');
         const actualResponse = await fetch(ACTUAL_DATA_URL);
         const actualJsonData = await actualResponse.json();
-        
-        const actualData = actualJsonData.map(item => ({
-            text: item.message,
-            label: item.waitTime
-        }));
+        const actualData = actualJsonData.map(item => ({ text: item.message, label: item.waitTime }));
 
         const predictedWaitTimes = [];
         const actualWaitTimes = [];
@@ -128,9 +98,7 @@ async function run() {
         const averagePredictedWaitTime = predictedWaitTimes.reduce((sum, val) => sum + val, 0) / predictedWaitTimes.length;
 
         const ctx = document.getElementById('myChart').getContext('2d');
-        if (window.myChartInstance) {
-            window.myChartInstance.destroy();
-        }
+        if (window.myChartInstance) window.myChartInstance.destroy();
 
         window.myChartInstance = new Chart(ctx, {
             type: 'line',
@@ -155,35 +123,14 @@ async function run() {
             options: {
                 responsive: true,
                 scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: '待ち時間 (分)' }
-                    },
-                    x: {
-                        title: { display: true, text: 'データポイント' }
-                    }
+                    y: { beginAtZero: true, title: { display: true, text: '待ち時間 (分)' } },
+                    x: { title: { display: true, text: 'データポイント' } }
                 },
                 plugins: {
                     annotation: {
                         annotations: {
-                            line1: {
-                                type: 'line',
-                                yMin: averageActualWaitTime,
-                                yMax: averageActualWaitTime,
-                                borderColor: 'rgb(75, 192, 192)',
-                                borderWidth: 2,
-                                borderDash: [6, 6],
-                                label: { enabled: true, content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`, position: 'end' }
-                            },
-                            line2: {
-                                type: 'line',
-                                yMin: averagePredictedWaitTime,
-                                yMax: averagePredictedWaitTime,
-                                borderColor: 'rgb(255, 99, 132)',
-                                borderWidth: 2,
-                                borderDash: [6, 6],
-                                label: { enabled: true, content: `予測平均値: ${averagePredictedWaitTime.toFixed(2)}`, position: 'start' }
-                            }
+                            line1: { type: 'line', yMin: averageActualWaitTime, yMax: averageActualWaitTime, borderColor: 'rgb(75, 192, 192)', borderWidth: 2, borderDash: [6, 6], label: { enabled: true, content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`, position: 'end' } },
+                            line2: { type: 'line', yMin: averagePredictedWaitTime, yMax: averagePredictedWaitTime, borderColor: 'rgb(255, 99, 132)', borderWidth: 2, borderDash: [6, 6], label: { enabled: true, content: `予測平均値: ${averagePredictedWaitTime.toFixed(2)}`, position: 'start' } }
                         }
                     }
                 }
