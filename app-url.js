@@ -8,18 +8,23 @@ let vocabulary = new Set();
 let wordToIndex = {};
 let maxLength = 0;
 
-function encode(text) {
+// データをクリーンアップし、単語配列に変換する共通関数
+function cleanAndTokenize(text) {
     // 絵文字と特殊文字を削除し、小文字に変換
-    // Unicodeの絵文字範囲をカバーする正規表現
     const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g;
     const cleanedText = text.replace(emojiRegex, '').replace(/[^\w\s]/g, '').toLowerCase();
+    
+    // 空白で単語を分割し、空の単語を除去
+    return cleanedText.split(' ').filter(word => word.length > 0);
+}
 
-    // 空白で単語を分割
-    const words = cleanedText.split(' ').filter(word => word.length > 0);
-
+// テキストを数値配列に変換する関数
+function encode(text) {
+    const words = cleanAndTokenize(text);
+    
     // ボキャブラリに基づいて単語を数値に変換
-    const encoded = words.map(word => wordToIndex[word] || 0);
-
+    const encoded = words.map(word => wordToIndex[word] || 0); // 未知の単語は0
+    
     // 全ての入力が同じ長さになるようにパディング
     const padded = new Array(maxLength).fill(0);
     encoded.forEach((value, index) => {
@@ -27,40 +32,12 @@ function encode(text) {
             padded[index] = value;
         }
     });
-
+    
     return padded;
 }
 
 // モデルの構築とトレーニング
-async function trainModel(trainingData) {
-    if (trainingData.length === 0) {
-        console.error('トレーニングデータがありません。');
-        return null;
-    }
-
-    // ボキャブラリの構築とテキストの数値化
-    trainingData.forEach(data => {
-        // 🚨 修正: ここで`encode`関数と同じテキストクリーンアップを行う
-        const cleanedText = data.text.replace(/[^\w\s]/g, '').toLowerCase();
-        const words = cleanedText.split(' ').filter(word => word.length > 0);
-        words.forEach(word => {
-            vocabulary.add(word);
-        });
-    });
-    let index = 1;
-    vocabulary.forEach(word => {
-        wordToIndex[word] = index++;
-    });
-    
-    // 🚨 修正: maxLengthの計算もクリーンアップ後の単語数で行う
-    maxLength = Math.max(...trainingData.map(d => {
-        const cleanedText = d.text.replace(/[^\w\s]/g, '').toLowerCase();
-        return cleanedText.split(' ').filter(word => word.length > 0).length;
-    }));
-    
-    const xs = tf.tensor2d(trainingData.map(data => encode(data.text)));
-    const ys = tf.tensor2d(trainingData.map(data => [data.label]));
-
+async function trainModel(xs, ys) {
     const model = tf.sequential();
     model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [maxLength] }));
     model.add(tf.layers.dense({ units: 1 }));
@@ -81,20 +58,37 @@ async function trainModel(trainingData) {
     return model;
 }
 
-// JSONデータを取得し、モデルを学習・予測してチャート化
+// データの読み込み、前処理、学習、予測、可視化を実行
 async function run() {
     try {
         console.log('トレーニングデータを取得中...');
         const trainingResponse = await fetch(TRAINING_DATA_URL);
         const trainingJsonData = await trainingResponse.json();
         
+        // データのクリーンアップとボキャブラリ構築
         const processedTrainingData = trainingJsonData.map(item => ({
             text: item.message,
             label: item.waitTime
         }));
 
-        // ボキャブラリ構築とモデルの学習
-        const model = await trainModel(processedTrainingData);
+        processedTrainingData.forEach(data => {
+            cleanAndTokenize(data.text).forEach(word => {
+                vocabulary.add(word);
+            });
+        });
+
+        let index = 1;
+        vocabulary.forEach(word => {
+            wordToIndex[word] = index++;
+        });
+        
+        maxLength = Math.max(...processedTrainingData.map(d => cleanAndTokenize(d.text).length));
+        
+        // テンソルへの変換
+        const xs = tf.tensor2d(processedTrainingData.map(data => encode(data.text)));
+        const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]));
+        
+        const model = await trainModel(xs, ys);
 
         if (!model) {
             return;
@@ -120,8 +114,7 @@ async function run() {
 
         console.log("実データの実際の待ち時間:", actualWaitTimes);
         console.log("実データの予測された待ち時間:", predictedWaitTimes);
-
-        // 平均値の計算とチャート化
+        
         const averageActualWaitTime = actualWaitTimes.reduce((sum, val) => sum + val, 0) / actualWaitTimes.length;
         const averagePredictedWaitTime = predictedWaitTimes.reduce((sum, val) => sum + val, 0) / predictedWaitTimes.length;
 
@@ -171,11 +164,7 @@ async function run() {
                                 borderColor: 'rgb(75, 192, 192)',
                                 borderWidth: 2,
                                 borderDash: [6, 6],
-                                label: {
-                                    enabled: true,
-                                    content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`,
-                                    position: 'end'
-                                }
+                                label: { enabled: true, content: `実データの平均値: ${averageActualWaitTime.toFixed(2)}`, position: 'end' }
                             },
                             line2: {
                                 type: 'line',
@@ -184,11 +173,7 @@ async function run() {
                                 borderColor: 'rgb(255, 99, 132)',
                                 borderWidth: 2,
                                 borderDash: [6, 6],
-                                label: {
-                                    enabled: true,
-                                    content: `予測平均値: ${averagePredictedWaitTime.toFixed(2)}`,
-                                    position: 'start'
-                                }
+                                label: { enabled: true, content: `予測平均値: ${averagePredictedWaitTime.toFixed(2)}`, position: 'start' }
                             }
                         }
                     }
