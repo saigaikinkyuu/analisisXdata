@@ -10,11 +10,9 @@ let maxLength = 0;
 
 // データをクリーンアップし、単語配列に変換する共通関数
 function cleanAndTokenize(text) {
-    // 絵文字と特殊文字を削除し、小文字に変換
     const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g;
     const cleanedText = text.replace(emojiRegex, '').replace(/[^\w\s]/g, '').toLowerCase();
     
-    // 空白で単語を分割し、空の単語を除去
     return cleanedText.split(' ').filter(word => word.length > 0);
 }
 
@@ -22,10 +20,8 @@ function cleanAndTokenize(text) {
 function encode(text) {
     const words = cleanAndTokenize(text);
     
-    // ボキャブラリに基づいて単語を数値に変換
-    const encoded = words.map(word => wordToIndex[word] || 0); // 未知の単語は0
+    const encoded = words.map(word => wordToIndex[word] || 0);
     
-    // 全ての入力が同じ長さになるようにパディング
     const padded = new Array(maxLength).fill(0);
     encoded.forEach((value, index) => {
         if (index < maxLength) {
@@ -65,7 +61,6 @@ async function run() {
         const trainingResponse = await fetch(TRAINING_DATA_URL);
         const trainingJsonData = await trainingResponse.json();
         
-        // データのクリーンアップとボキャブラリ構築
         const processedTrainingData = trainingJsonData.map(item => ({
             text: item.message,
             label: item.waitTime
@@ -84,8 +79,24 @@ async function run() {
         
         maxLength = Math.max(...processedTrainingData.map(d => cleanAndTokenize(d.text).length));
         
-        // テンソルへの変換
-        const xs = tf.tensor2d(processedTrainingData.map(data => encode(data.text)));
+        // 🚨 ここからデバッグログを追加 🚨
+        console.log("--- 教師データのエンコード前・後の状態 ---");
+        const encodedTrainingData = processedTrainingData.map(data => {
+            const encodedVector = encode(data.text);
+            const containsInvalid = encodedVector.some(val => isNaN(val) || typeof val !== 'number');
+            
+            if (containsInvalid) {
+                console.error(`⛔️ ERROR: エンコード失敗の原因となる教師データを発見!`);
+                console.error(`- 元のテキスト: "${data.text}"`);
+                console.error(`- エンコード結果: [${encodedVector.join(', ')}]`);
+                // この時点で処理を中断することも可能です
+                // throw new Error("不正な教師データが検出されました。");
+            }
+            return encodedVector;
+        });
+        console.log("--- 教師データのチェック完了 ---");
+        
+        const xs = tf.tensor2d(encodedTrainingData);
         const ys = tf.tensor2d(processedTrainingData.map(data => [data.label]));
         
         const model = await trainModel(xs, ys);
