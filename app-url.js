@@ -9,20 +9,25 @@ let wordToIndex = {};
 let maxLength = 0;
 
 function encode(text) {
-    // 句読点や特殊文字を削除して小文字に変換
-    const cleanedText = text.replace(/[^\w\s]/g, '').toLowerCase();
+    // 絵文字と特殊文字を削除し、小文字に変換
+    // Unicodeの絵文字範囲をカバーする正規表現
+    const emojiRegex = /(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g;
+    const cleanedText = text.replace(emojiRegex, '').replace(/[^\w\s]/g, '').toLowerCase();
+
+    // 空白で単語を分割
     const words = cleanedText.split(' ').filter(word => word.length > 0);
-    
-    const encoded = words.map(word => wordToIndex[word] || 0); // 未知の単語は0
-    
-    // パディング
+
+    // ボキャブラリに基づいて単語を数値に変換
+    const encoded = words.map(word => wordToIndex[word] || 0);
+
+    // 全ての入力が同じ長さになるようにパディング
     const padded = new Array(maxLength).fill(0);
     encoded.forEach((value, index) => {
         if (index < maxLength) {
             padded[index] = value;
         }
     });
-    
+
     return padded;
 }
 
