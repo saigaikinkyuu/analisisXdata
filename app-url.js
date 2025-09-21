@@ -1,7 +1,7 @@
 // トレーニングデータのJSONをホストしているURLを指定
-const TRAINING_DATA_URL = 'https://example.com/training_data.json';
+const TRAINING_DATA_URL = './json/training_data.json';
 // 実データ（テスト用）のJSONをホストしているURLを指定
-const ACTUAL_DATA_URL = 'https://example.com/actual_data.json';
+const ACTUAL_DATA_URL = './json/actual_data.json';
 
 // グローバルスコープでボキャブラリとエンコーダーを定義
 let vocabulary = new Set();
