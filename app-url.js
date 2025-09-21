@@ -30,69 +30,71 @@ function buildVocabulary(messages) {
 }
 
 async function main() {
-    const trainingData = await loadJSON('./json/training_data.json');
-    const actualData = await loadJSON('./json/actual_data.json');
+  const trainingData = await loadJSON('./json/training_data.json');
+  const actualData = await loadJSON('./json/actual_data.json');
 
-    const trainingMessages = trainingData
-        .map(d => d.message)
-        .filter(m => typeof m === 'string');
+  // 999999 は "不明" として扱うが、学習には使用する
+  const validTrainingData = trainingData.filter(d =>
+    typeof d.message === 'string' &&
+    !isNaN(parseFloat(d.waitTime))
+  );
 
-    const trainingLabels = trainingData
-        .map(d => parseFloat(d.waitTime))
-        .filter(n => !isNaN(n));
+  const trainingMessages = validTrainingData.map(d => d.message);
+  const trainingLabels = validTrainingData.map(d => parseFloat(d.waitTime));
 
+  const actualMessages = actualData.map(d => d.message);
 
-    const actualMessages = actualData.map(d => d.message);
+  const vocab = buildVocabulary(trainingMessages);
+  const xs = tf.tensor2d(tokenizeMessages(trainingMessages, vocab));
+  const ys = tf.tensor2d(trainingLabels, [trainingLabels.length, 1]);
 
-    const vocab = buildVocabulary(trainingMessages);
-    const xs = tf.tensor2d(tokenizeMessages(trainingMessages, vocab));
-    const ys = tf.tensor2d(trainingLabels, [trainingLabels.length, 1]);
+  // モデル構築と学習
+  const model = tf.sequential();
+  model.add(tf.layers.dense({ units: 16, activation: 'relu', inputShape: [vocab.length] }));
+  model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
+  model.add(tf.layers.dense({ units: 1 }));
 
-    // モデルの定義
-    const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 16, activation: 'relu', inputShape: [vocab.length] }));
-    model.add(tf.layers.dense({ units: 8, activation: 'relu' }));
-    model.add(tf.layers.dense({ units: 1 }));
+  model.compile({ loss: 'meanSquaredError', optimizer: 'adam' });
+  await model.fit(xs, ys, {
+    epochs: 50,
+    batchSize: 4,
+    shuffle: true
+  });
 
-    model.compile({ loss: 'meanSquaredError', optimizer: 'adam' });
+  // 実データで推論
+  const actualInputs = tf.tensor2d(tokenizeMessages(actualMessages, vocab));
+  const predictions = await model.predict(actualInputs).array();
 
-    // モデルの学習
-    await model.fit(xs, ys, {
-        epochs: 50,
-        batchSize: 4,
-        shuffle: true
-    });
+  // 999999（不明）でないものだけチャートに表示
+  const filteredResults = actualMessages.map((msg, i) => {
+    return { message: msg, waitTime: predictions[i][0] };
+  }).filter(result => result.waitTime !== 999999);
 
-    // 実データで予測
-    const actualInputs = tf.tensor2d(tokenizeMessages(actualMessages, vocab));
-    const predictions = model.predict(actualInputs);
-    const predictedValues = await predictions.array();
-
-    // Chart.js で可視化
-    const ctx = document.getElementById('waitChart').getContext('2d');
-    new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: actualMessages,
-            datasets: [{
-                label: '予測待ち時間（分）',
-                data: predictedValues.map(p => p[0]),
-                backgroundColor: 'rgba(75, 192, 192, 0.6)'
-            }]
+  // Chart.js 描画
+  const ctx = document.getElementById('waitChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: filteredResults.map(r => r.message),
+      datasets: [{
+        label: '予測待ち時間（分）',
+        data: filteredResults.map(r => r.waitTime),
+        backgroundColor: 'rgba(75, 192, 192, 0.6)'
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: '待ち時間（分）' }
         },
-        options: {
-            responsive: true,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    title: { display: true, text: '待ち時間（分）' }
-                },
-                x: {
-                    title: { display: true, text: 'メッセージ' }
-                }
-            }
+        x: {
+          title: { display: true, text: 'メッセージ' }
         }
-    });
+      }
+    }
+  });
 }
 
 main();
